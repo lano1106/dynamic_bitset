@@ -37,6 +37,17 @@ public:
             _mm512_storeu_si512(lhs++, C);
         }
     }
+    static void do_and(WordT *lhs, const WordT *rhs, int len)
+    {
+        WordT A, B, C;
+
+        for (int i = 0; i < len; ++i) {
+            A = _mm512_loadu_si512(lhs);
+            B = _mm512_loadu_si512(rhs++);
+            C = _mm512_and_si512(A, B);
+            _mm512_storeu_si512(lhs++, C);
+        }
+    }
     static void do_sub(WordT *lhs, const WordT *rhs, int len)
     {
         WordT A, B, C;
@@ -96,6 +107,17 @@ public:
             _mm_storeu_si128(lhs++, C);
         }
     }
+    static void do_and(WordT *lhs, const WordT *rhs, int len)
+    {
+        WordT A, B, C;
+
+        for (int i = 0; i < len; ++i) {
+            A = _mm_loadu_si128(lhs);
+            B = _mm_loadu_si128(rhs++);
+            C = _mm_and_si128(A, B);
+            _mm_storeu_si128(lhs++, C);
+        }
+    }
     static void do_sub(WordT *lhs, const WordT *rhs, int len)
     {
         WordT A, B, C;
@@ -146,6 +168,11 @@ public:
         for (int i = 0; i < len; ++i)
             *lhs++ |= *rhs++;
     }
+    static void do_and(WordT *lhs, const WordT *rhs, int len)
+    {
+        for (int i = 0; i < len; ++i)
+            *lhs++ &= *rhs++;
+    }
     static void do_sub(WordT *lhs, const WordT *rhs, int len)
     {
         for (int i = 0; i < len; ++i) {
@@ -194,15 +221,26 @@ public:
 
     void reset() noexcept
     {
-        auto &vec{getDerived()->m_vec};
+        auto &vec{getVec()};
 
         memset(&vec[0], 0, std::size(vec)*sizeof(block_type));
     }
     Derived &operator|=(const Derived& rhs)
     {
-        auto &vec{getDerived()->m_vec};
+        auto &vec{getVec()};
 
-        bitsetImpl::do_or(&vec[0], &rhs.m_vec[0], std::size(vec));
+        bitsetImpl::do_or(&vec[0], &rhs.getVec()[0], std::size(vec));
+        return *getDerived();
+    }
+    /*
+     * can be any type of base_bitset as long as it has the same size (not enforced)
+     */
+    template <class RhsType>
+    Derived &operator&=(const RhsType& rhs)
+    {
+        auto &vec{getVec()};
+
+        bitsetImpl::do_and(&vec[0], &rhs.getVec()[0], std::size(vec));
         return *getDerived();
     }
     friend Derived operator-(const Derived &lhs,
@@ -210,15 +248,15 @@ public:
     {
         auto res{lhs.getEmpty()};
 
-        bitsetImpl::do_sub(&lhs.m_vec[0], &rhs.m_vec[0], &res.m_vec[0],
-                           std::size(res.m_vec));
+        bitsetImpl::do_sub(&lhs.getVec()[0], &rhs.getVec()[0], &res.getVec()[0],
+                           std::size(res.getVec()));
         return res;
     }
     Derived &operator-=(const Derived& rhs)
     {
-        auto &vec{getDerived()->m_vec};
+        auto &vec{getVec()};
 
-        bitsetImpl::do_sub(&vec[0], &rhs.m_vec[0], std::size(vec));
+        bitsetImpl::do_sub(&vec[0], &rhs.getVec()[0], std::size(vec));
         return *getDerived();
     }
     Derived &operator|=(std::size_t pos)
@@ -252,9 +290,9 @@ public:
     bool any_intersect(const Derived &rhs) const
     {
         // I am not too sure how and if this could be made faster using AVX
-        auto &vec{getDerived()->m_vec};
+        auto &vec{getVec()};
         auto *lhs_bitmap = reinterpret_cast<const uint64_t *>(&vec[0]);
-        auto *rhs_bitmap = reinterpret_cast<const uint64_t *>(&rhs.m_vec[0]);
+        auto *rhs_bitmap = reinterpret_cast<const uint64_t *>(&rhs.getVec()[0]);
 
         for (size_t k{}; k < m_64bitsIntNum; ++k) {
             if (lhs_bitmap[k] & rhs_bitmap[k])
@@ -270,7 +308,7 @@ public:
     void iterate_bits(CB &callback) const
     {
         uint64_t     bitset;
-        const auto &vec{getDerived()->m_vec};
+        const auto &vec{getVec()};
         auto        *bitmap = reinterpret_cast<const uint64_t *>(&vec[0]);
 
         for (size_t k{}; k < m_64bitsIntNum; ++k) {
@@ -284,13 +322,15 @@ public:
             }
         }
     }
-    size_t nbits() const { return std::size(getDerived()->m_vec)*_S_bits_per_block; }
+    size_t nbits() const { return std::size(getVec())*_S_bits_per_block; }
     size_t count() const
     {
-        auto &vec{getDerived()->m_vec};
+        auto &vec{getVec()};
 
         return bitsetImpl::count(&vec[0], std::size(vec));
     }
+          auto &getVec()       { return getDerived()->m_vec; }
+    const auto &getVec() const { return getDerived()->m_vec; }
 
 protected:
     base_bitset(size_t bits64Num)
@@ -311,9 +351,9 @@ private:
     static size_t _S_whichword(size_t pos) noexcept
     { return pos / 64; }
     uint64_t &_M_getword(size_t pos) noexcept
-    { return reinterpret_cast<uint64_t *>(&getDerived()->m_vec[0])[_S_whichword(pos)]; }
+    { return reinterpret_cast<uint64_t *>(&getVec()[0])[_S_whichword(pos)]; }
     uint64_t _M_getword(size_t pos) const noexcept
-    { return reinterpret_cast<const uint64_t *>(&getDerived()->m_vec[0])[_S_whichword(pos)]; }
+    { return reinterpret_cast<const uint64_t *>(&getVec()[0])[_S_whichword(pos)]; }
     static size_t _S_whichbit(size_t pos) noexcept
     { return pos % 64; }
     static uint64_t _S_maskbit(size_t pos) noexcept
@@ -323,6 +363,7 @@ private:
 
     size_t m_64bitsIntNum{};
 };
+
 
 /*
  * class static_bitset
@@ -346,6 +387,7 @@ private:
     std::array<typename Parent::block_type,numBlocks()> m_vec{}; __attribute__ ((aligned (64)));
 #pragma GCC diagnostic pop
 };
+
 
 /*
  * class dynamic_bitset
